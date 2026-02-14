@@ -5,7 +5,7 @@
 
 
 // Delegate to notify when the best move is found (thread-safe)
-DECLARE_DELEGATE_TwoParams(FOnStockfishResult, const FString& /*BestMove*/, bool /*bIsWhite*/);
+DECLARE_DELEGATE_FourParams(FOnStockfishResult, const FString& /*BestMove*/, bool /*bIsWhite*/,  float /*EvaluationNormalized*/, const FString& /*EvalText*/);
 
 // The runnable class to manage Stockfish process in a separate thread
 class FStockfishRunnable : public FRunnable
@@ -169,7 +169,14 @@ private:
         // Send FEN and depth command to Stockfish
         WriteLine(FString::Printf(TEXT("position fen %s"), *FEN));
         WriteLine(FString::Printf(TEXT("go depth %d"), Depth));
-    
+
+        int32 LatestCentipawnEval = 0;
+        int32 MateScore = 0;
+        bool bIsMate = false;
+
+        float LatestAdvantage = 0.5f;
+        FString EvalText = TEXT("+0.00");
+        
         const float TimeoutLimit = 30.0f; 
         float TimeElapsed = 0.0f;
     
@@ -196,6 +203,43 @@ private:
                     if (Line.IsEmpty()) continue;
     
                     UE_LOG(LogTemp, Log, TEXT("Stockfish output line: %s"), *Line);
+
+                    // ===== PARSE EVALUATION =====
+                    if (Line.StartsWith("info depth") && Line.Contains("score"))
+                    {
+                        TArray<FString> Tokens;
+                        Line.ParseIntoArray(Tokens, TEXT(" "));
+
+                        for (int32 t = 0; t < Tokens.Num(); ++t)
+                        {
+                            // Centipawn evaluation
+                            if (Tokens[t] == "cp" && t + 1 < Tokens.Num())
+                            {
+                                bIsMate = false;
+                                LatestCentipawnEval = FCString::Atoi(*Tokens[t + 1]);
+                                // Flip if black to move so Eval always represents "player to move"
+                                if (!bIsWhite)
+                                {
+                                    LatestCentipawnEval = -LatestCentipawnEval;
+                                }
+                                LatestAdvantage = ConvertScoreToAdvantage(LatestCentipawnEval);
+                                float PawnValue = LatestCentipawnEval / 100.0f;
+                                EvalText = FString::Printf(TEXT("%+.2f"), PawnValue);
+                            }
+                            // Mate evaluation
+                            else if (Tokens[t] == "mate" && t + 1 < Tokens.Num())
+                            {
+                                bIsMate = true;
+                                MateScore = FCString::Atoi(*Tokens[t + 1]);
+                                if (!bIsWhite)
+                                {
+                                    MateScore = -MateScore;
+                                }
+                                LatestAdvantage = (MateScore > 0) ? 1.0f : 0.0f;
+                                EvalText = FString::Printf(TEXT("M%d"), FMath::Abs(MateScore));
+                            }
+                        }
+                    }
     
                     // Check for best move
                     if (Line.StartsWith("bestmove"))
@@ -207,10 +251,12 @@ private:
                             FString BestMove = Tokens[1];
                             UE_LOG(LogTemp, Log, TEXT("Best move found: %s"), *BestMove);
                             
+                            float FinalAdvantage = LatestAdvantage;
                             bool bLocalIsWhite = bIsWhite;
-                            AsyncTask(ENamedThreads::GameThread, [Callback = Callback, BestMove, bLocalIsWhite]()
+                            FString FinalEvalText = EvalText;
+                            AsyncTask(ENamedThreads::GameThread, [Callback = Callback, BestMove, bLocalIsWhite, FinalAdvantage, FinalEvalText]()
                             {
-                                Callback.ExecuteIfBound(BestMove, bLocalIsWhite);
+                                Callback.ExecuteIfBound(BestMove, bLocalIsWhite, FinalAdvantage, FinalEvalText);
                             });
                             return;
                         }
@@ -230,6 +276,16 @@ private:
             }
         }
     UE_LOG(LogTemp, Warning, TEXT("No best move found for FEN: %s"), *FEN);
+    }
+
+    float ConvertScoreToAdvantage(int32 Centipawns)
+    {
+        // Cap evaluation to avoid extreme spikes
+        const float MaxEval = 600.0f; // 6 pawns feels good visually
+        float Clamped = FMath::Clamp((float)Centipawns, -MaxEval, MaxEval);
+
+        // Convert from -MaxEval..MaxEval → 0..1
+        return (Clamped / MaxEval) * 0.5f + 0.5f;
     }
 
     void StopProcess()

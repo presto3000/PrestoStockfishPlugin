@@ -52,15 +52,15 @@ void UStockfishHandler::RequestBestMove(const FString& FEN, bool bIsWhite, int32
 
     // Bind the callback, marshaling to game thread
     FOnStockfishResult LocalCallback = FOnStockfishResult::CreateLambda(
-        [WeakThis = TWeakObjectPtr<UStockfishHandler>(this)](const FString& BestMove, bool bPlayerWhite)
+        [WeakThis = TWeakObjectPtr<UStockfishHandler>(this)](const FString& BestMove, bool bPlayerWhite, float Eval, const FString& EvalText)
         {
             if (!WeakThis.IsValid()) return;
 
-            AsyncTask(ENamedThreads::GameThread, [WeakThis, BestMove, bPlayerWhite]()
+            AsyncTask(ENamedThreads::GameThread, [WeakThis, BestMove, bPlayerWhite, Eval, EvalText]()
             {
                 if (WeakThis.IsValid())
                 {
-                    WeakThis->OnBestMoveFound.Broadcast(BestMove, bPlayerWhite);
+                    WeakThis->OnBestMoveFound.Broadcast(BestMove, bPlayerWhite, Eval, EvalText);
                 }
             });
         }
@@ -68,7 +68,8 @@ void UStockfishHandler::RequestBestMove(const FString& FEN, bool bIsWhite, int32
     
     // the maximum number of threads CPU can safely handle
     int32 MaxThreads = FPlatformMisc::NumberOfCoresIncludingHyperthreads();
-    int32 ThreadsToUse = FMath::Clamp(MaxThreads, 1, MaxThreads);
+    //int32 ThreadsToUse = FMath::Clamp(MaxThreads, 1, MaxThreads);
+    int32 ThreadsToUse = FPlatformMisc::NumberOfCores() - 2;
     
     StockfishRunnable = new FStockfishRunnable(FEN, ThreadsToUse, LocalCallback, bIsWhite, Depth, SkillLevel);
     StockfishThread = FRunnableThread::Create(StockfishRunnable, TEXT("StockfishThread"));

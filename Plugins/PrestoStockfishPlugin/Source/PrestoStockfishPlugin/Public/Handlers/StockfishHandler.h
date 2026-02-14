@@ -7,7 +7,7 @@
 #include "StockfishHandler.generated.h"
 
 // Delegate to notify when Stockfish finds a move
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStockfishMoveFound, const FString&, BestMove, bool, bIsWhite);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOnStockfishMoveFound, const FString&, BestMove, bool, bIsWhite, float, EvaluationNormalized, const FString&, EvalText);
 class FStockfishRunnable;
 
 UCLASS(Blueprintable, BlueprintType)
